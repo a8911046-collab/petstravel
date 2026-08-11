@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>台灣犬貓入境檢疫規定計算與步驟指南</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & ReactDOM CDN -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- FontAwesome CDN -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen">
+
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+// 非疫區國家列表
+const NON_ENDEMIC_COUNTRIES = [
+    "日本", "新加坡", "澳大利亞", "紐西蘭", "捷克", 
+    "愛沙尼亞", "冰島", "挪威 (Svalbard群島除外)", 
+    "瑞典", "英國", "美國夏威夷州", "美國關島"
+];
+
+// 禁運及特殊品種提醒
+const RESTRICTED_DOGS = ["比特犬", "美國史大佛夏牛頭犬"];
+
+function PetQuarantineApp() {
+    // 表單狀態
+    const [petType, setPetType] = useState('dog'); // dog, cat
+    const [breed, setBreed] = useState('');
+    const [isReentry, setIsReentry] = useState(false); // 台灣出境復運回台
+    const [originCountry, setOriginCountry] = useState('日本');
+    const [isNonEndemic, setIsNonEndemic] = useState(true);
+    
+    // 日期狀態
+    const [importDate, setImportDate] = useState('');
+    const [vaccineDate, setVaccineDate] = useState('');
+    const [bloodDate, setBloodDate] = useState('');
+    
+    // 疫區免隔離條件選擇
+    const [endemicOption, setEndemicOption] = useState('direct_report'); // 'early_120', 'direct_report', 'standard_isolate'
+    const [transitEndemic, setTransitEndemic] = useState(false); // 非疫區轉機經過疫區
+
+    // 計算結果
+    const [result, setResult] = useState(null);
+
+    // 當國家變更時自動判定是否為非疫區
+    useEffect(() => {
+        const nonEndemic = NON_ENDEMIC_COUNTRIES.includes(originCountry);
+        setIsNonEndemic(nonEndemic);
+    }, [originCountry]);
+
+    // 日期運算輔助函式
+    const addDays = (dateStr, days) => {
+        if (!dateStr) return null;
+        const d = new Date(dateStr);
+        d.setDate(d.getDate() + days);
+        return d.toISOString().split('T')[0];
+    };
+
+    const diffDays = (d1Str, d2Str) => {
+        if (!d1Str || !d2Str) return 0;
+        const d1 = new Date(d1Str);
+        const d2 = new Date(d2Str);
+        const diffTime = d2 - d1;
+        return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    };
+
+    // 核心判定邏輯
+    const handleCalculate = () => {
+        if (!importDate || !vaccineDate) {
+            alert('請至少填寫「預定入境日期」與「狂犬病疫苗施打日期」！');
+            return;
+        }
+
+        const warnings = [];
+        const infoList = [];
+        let isolationDays = 0;
+        let status = 'SUCCESS'; // SUCCESS, WARNING, DANGER
+        let statusTitle = '';
+
+        // 1. 品種檢查
+        if (petType === 'dog' && RESTRICTED_DOGS.some(b => breed.includes(b))) {
+            warnings.push(`⚠️ 警告：${breed} 為台灣禁止飼養或輸入之犬種！`);
+            status = 'DANGER';
+        }
+        if (petType === 'cat' && breed.includes('豹貓')) {
+            warnings.push('ℹ️ 提醒：豹貓（孟加拉貓）需為混種第5代 (F5) 以上方可按一般家貓入境，申辦時須附血統證明。');
+        }
+
+        // 2. 疫苗時效檢查 (入境1年前至入境30日前)
+        const daysVaccineToImport = diffDays(vaccineDate, importDate);
+        if (daysVaccineToImport < 30) {
+            warnings.push(`❌ 狂犬病疫苗施打日距離入境日僅 ${daysVaccineToImport} 天（須滿 30 天才生效）。`);
+            status = 'DANGER';
+        } else if (daysVaccineToImport > 365) {
+            warnings.push(`❌ 狂犬病疫苗施打日距離入境日已超過 1 年 (${daysVaccineToImport} 天)，即使施打 3 年效期疫苗，依我國規定入境前須在 1 年內補強！`);
+            status = 'DANGER';
+        } else {
+            infoList.push(`✅ 狂犬病疫苗有效期符合規定 (距入境日 ${daysVaccineToImport} 天，符合 30天~1年 規範)。`);
+        }
+
+        // 3. 隔離天數與條件判斷
+        let applicationDeadline = '';
+        let applicationDeadlineDays = 20;
+
+        if (isNonEndemic) {
+            // ----- 非疫區判斷 -----
+            applicationDeadlineDays = 20;
+            applicationDeadline = addDays(importDate, -20);
+
+            if (transitEndemic) {
+                isolationDays = 7;
+                statusTitle = '需隔離檢疫 7 天 (因途經狂犬病疫區轉運)';
+                infoList.push('⚠️ 非疫區輸入但途經疫區轉運，若未取得未出港站且未接觸其他動物之證明，或未於輸出國封條，需延長隔離 7 天。');
+            } else {
+                isolationDays = 0;
+                statusTitle = '免隔離檢疫 (0 天)';
+                infoList.push('✅ 符合非疫區輸入規定，到達台灣機場/港口完成檢疫查驗後即可帶回。');
+            }
+        } else {
+            // ----- 疫區判斷 -----
+            if (!bloodDate) {
+                warnings.push('❌ 狂犬病疫區輸入必須填寫「狂犬病血清抗體力價抽血日期」！');
+                status = 'DANGER';
+            } else {
+                const daysBloodToImport = diffDays(bloodDate, importDate);
+
+                if (isReentry) {
+                    // 台灣出境復運回台
+                    if (daysBloodToImport <= 365 && daysBloodToImport >= 0) {
+                        isolationDays = 0;
+                        statusTitle = '免隔離檢疫 (台灣輸出 1 年內復運回台)';
+                        infoList.push(`✅ 於台灣輸出前抽血且抽血日距入境日 ${daysBloodToImport} 天（在 1 年內），可免隔離。`);
+                    } else {
+                        warnings.push(`❌ 抽血日距離入境日已超過 1 年 (${daysBloodToImport} 天)，無法適用復運免隔離！`);
+                        status = 'DANGER';
+                    }
+                } else {
+                    // 一般國外犬貓輸入
+                    if (daysBloodToImport < 90) {
+                        isolationDays = 7;
+                        statusTitle = '需隔離檢疫 (抽血時間不足 90 天)';
+                        warnings.push(`⚠️ 抽血日距入境日僅 ${daysBloodToImport} 天 (不足 90 天)，入境後將被要求隔離至抽血日滿 97 天或進行補充處置。`);
+                        status = 'DANGER';
+                    } else if (daysBloodToImport >= 90 && daysBloodToImport < 180) {
+                        // 90~180 天之間：必須隔離 7 天
+                        isolationDays = 7;
+                        statusTitle = '需指定場所隔離檢疫 7 天';
+                        applicationDeadlineDays = 20;
+                        applicationDeadline = addDays(importDate, -20);
+                        infoList.push(`ℹ️ 抽血日距入境日為 ${daysBloodToImport} 天 (滿 90 天但未滿 180 天)，需入境隔離檢疫 7 天。`);
+                    } else if (daysBloodToImport >= 180 && daysBloodToImport <= 365) {
+                        // 180天~1年：可申請免隔離
+                        if (endemicOption === 'early_120') {
+                            isolationDays = 0;
+                            statusTitle = '免隔離檢疫 (已於 120 天前提出申請)';
+                            applicationDeadlineDays = 120;
+                            applicationDeadline = addDays(importDate, -120);
+                            infoList.push(`✅ 抽血滿 180 天以上，且於入境 120 天前向防檢署提出申請，符合免隔離資格。`);
+                        } else if (endemicOption === 'direct_report') {
+                            isolationDays = 0;
+                            statusTitle = '免隔離檢疫 (報告由實驗室/輸出國檢疫機關直傳)';
+                            applicationDeadlineDays = 20;
+                            applicationDeadline = addDays(importDate, -20);
+                            infoList.push(`✅ 抽血滿 180 天以上，於入境 20 天前申請，且抗體報告由指定實驗室或輸出國官署 direct email 至 rabiesreport@aphia.gov.tw 或官網可查，符合免隔離。`);
+                        } else {
+                            // 選擇一般隔離
+                            isolationDays = 7;
+                            statusTitle = '需指定場所隔離檢疫 7 天';
+                            applicationDeadlineDays = 20;
+                            applicationDeadline = addDays(importDate, -20);
+                            infoList.push(`ℹ️ 符合抽血標準，但選擇標準隔離檢疫流程。`);
+                        }
+                    } else {
+                        warnings.push(`❌ 抽血日距離入境日已超過 1 年 (${daysBloodToImport} 天)，抗體力價報告已失效，須重新抽血檢測！`);
+                        status = 'DANGER';
+                    }
+                }
+            }
+        }
+
+        // 時間節點規劃
+        const timeline = [
+            { title: '晶片植入 & 狂犬病疫苗施打', date: vaccineDate, note: '疫苗須為不活化疫苗，施打時犬貓須滿 90 日齡' },
+        ];
+
+        if (!isNonEndemic && bloodDate) {
+            timeline.push({ title: '狂犬病血清抗體力價抽血 (RNATT)', date: bloodDate, note: '須送到 WOAH 或防檢署指定實驗室，力價須 ≥ 0.5 IU/ml' });
+        }
+
+        if (applicationDeadline) {
+            timeline.push({ 
+                title: `最晚線上申請「輸入檢疫同意文件」`, 
+                date: applicationDeadline, 
+                note: `請至「輸入犬貓檢疫資訊網」申請 (最晚輸入前 ${applicationDeadlineDays} 天)` 
+            });
+        }
+
+        timeline.push({ 
+            title: '向輸出國申辦「輸出國動物檢疫證明書」', 
+            date: addDays(importDate, -10), 
+            note: '出發前持疫苗證明、血檢報告至當地官方動植物檢疫單位核發正本' 
+        });
+
+        timeline.push({ title: '抵達台灣機場/港口進行檢疫查驗', date: importDate, note: isolationDays === 0 ? '查驗通過後直接帶回家' : `專車押送至指定隔離所隔離 ${isolationDays} 天` });
+
+        setResult({
+            status,
+            statusTitle,
+            isolationDays,
+            warnings,
+            infoList,
+            timeline,
+            applicationDeadline,
+            applicationDeadlineDays
+        });
+    };
+
+    return (
+        <div class="max-w-5xl mx-auto px-4 py-8">
+            {/* Header */}
+            <header class="bg-gradient-to-r from-teal-700 to-teal-900 text-white p-6 rounded-2xl shadow-xl mb-8 flex flex-col md:flex-row items-center justify-between gap-4">
+                <div class="flex items-center gap-4">
+                    <div class="bg-white/10 p-3 rounded-xl text-3xl">
+                        <i class="fa-solid fa-passport"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-2xl font-bold">台灣犬貓入境檢疫規定試算與步驟指南</h1>
+                        <p class="text-teal-200 text-sm mt-1">依據農業部動植物防疫檢疫署 2026 最新檢疫條件規定</p>
+                    </div>
+                </div>
+                <div class="bg-teal-800/60 px-4 py-2 rounded-lg text-xs border border-teal-500/30">
+                    <i class="fa-solid fa-clock-rotate-left mr-1"></i> 最新法規修正：113年2月發布施行
+                </div>
+            </header>
+
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                {/* Form Input Section */}
+                <div class="lg:col-span-5 bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                    <h2 class="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2 border-b pb-3">
+                        <i class="fa-solid fa-[#008080] fa-sliders text-teal-600"></i> 輸入動物與檢疫資訊
+                    </h2>
+
+                    <form onSubmit={(e) => { e.preventDefault(); handleCalculate(); }} class="space-y-4">
+                        {/* 寵物種類與品種 */}
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 mb-1">動物種類</label>
+                                <select 
+                                    value={petType} 
+                                    onChange={e => setPetType(e.target.value)}
+                                    class="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                                >
+                                    <option value="dog">🐕 狗 (Dog)</option>
+                                    <option value="cat">🐈 貓 (Cat)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 mb-1">品種 (選填)</label>
+                                <input 
+                                    type="text" 
+                                    placeholder="例如: 比特犬 / 豹貓" 
+                                    value={breed} 
+                                    onChange={e => setBreed(e.target.value)}
+                                    class="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                                />
+                            </div>
+                        </div>
+
+                        {/* 是否台灣出境復運回台 */}
+                        <div class="bg-teal-50/60 p-3 rounded-xl border border-teal-100">
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input 
+                                    type="checkbox" 
+                                    checked={isReentry} 
+                                    onChange={e => setIsReentry(e.target.checked)}
+                                    class="w-4 h-4 text-teal-600 rounded focus:ring-teal-500"
+                                />
+                                <span class="text-xs font-semibold text-teal-900">此動物為自我國輸出後復運回台？</span>
+                            </label>
+                        </div>
+
+                        {/* 出發國家/區域 */}
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600 mb-1">輸出國家 / 區域</label>
+                            <select 
+                                value={originCountry} 
+                                onChange={e => setOriginCountry(e.target.value)}
+                                class="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                            >
+                                <optgroup label="狂犬病非疫區國家/地區 (12個)">
+                                    {NON_ENDEMIC_COUNTRIES.map(c => <option key={c} value={c}>{c}</option>)}
+                                </optgroup>
+                                <optgroup label="狂犬病疫區國家 (其他)">
+                                    <option value="中國大陸">中國大陸 (須經濟部國貿署專案許可)</option>
+                                    <option value="美國 (本土/其他州)">美國 (本土/其他州)</option>
+                                    <option value="加拿大">加拿大</option>
+                                    <option value="泰國">泰國</option>
+                                    <option value="越南">越南</option>
+                                    <option value="韓國">韓國</option>
+                                    <option value="其他狂犬病疫區國家">其他狂犬病疫區國家</option>
+                                </optgroup>
+                            </select>
+                        </div>
+
+                        {/* 非疫區與疫區狀態提示卡 */}
+                        <div class={`p-3 rounded-xl text-xs flex items-center justify-between ${isNonEndemic ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-amber-50 text-amber-800 border border-amber-200'}`}>
+                            <span class="font-bold">
+                                地理區分類：{isNonEndemic ? '🌿 狂犬病非疫區' : '⚠️ 狂犬病疫區'}
+                            </span>
+                            <span class="text-[11px] underline">
+                                {isNonEndemic ? '原則免隔離' : '需血檢/滿額條件可免隔離'}
+                            </span>
+                        </div>
+
+                        {/* 非疫區特有選項：轉機 */}
+                        {isNonEndemic && (
+                            <div class="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input 
+                                        type="checkbox" 
+                                        checked={transitEndemic} 
+                                        onChange={e => setTransitEndemic(e.target.checked)}
+                                        class="w-4 h-4 text-teal-600 rounded focus:ring-teal-500"
+                                    />
+                                    <span class="text-xs text-slate-700">運輸途中會經狂犬病疫區轉機/轉運？</span>
+                                </label>
+                            </div>
+                        )}
+
+                        {/* 日期選擇區 */}
+                        <div class="space-y-3 pt-2">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 mb-1">
+                                    1. 預定入境台灣日期 <span class="text-red-500">*</span>
+                                </label>
+                                <input 
+                                    type="date" 
+                                    value={importDate} 
+                                    onChange={e => setImportDate(e.target.value)}
+                                    class="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                                />
+                            </div>
+
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 mb-1">
+                                    2. 最近一次狂犬病疫苗施打日期 <span class="text-red-500">*</span>
+                                </label>
+                                <input 
+                                    type="date" 
+                                    value={vaccineDate} 
+                                    onChange={e => setVaccineDate(e.target.value)}
+                                    class="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                                />
+                                <p class="text-[11px] text-slate-500 mt-0.5">須為不活化疫苗，且施打時寵物須滿90日齡</p>
+                            </div>
+
+                            {!isNonEndemic && (
+                                <div>
+                                    <label class="block text-xs font-semibold text-slate-600 mb-1">
+                                        3. 狂犬病血清抗體力價抽血日期 (RNATT) <span class="text-red-500">*</span>
+                                    </label>
+                                    <input 
+                                        type="date" 
+                                        value={bloodDate} 
+                                        onChange={e => setBloodDate(e.target.value)}
+                                        class="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                                    />
+                                    <p class="text-[11px] text-slate-500 mt-0.5">抗體濃度須 ≥ 0.5 IU/ml</p>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* 疫區免隔離方式選擇 */}
+                        {!isNonEndemic && !isReentry && (
+                            <div class="bg-amber-50/70 p-3 rounded-xl border border-amber-200 space-y-2">
+                                <label class="block text-xs font-bold text-amber-900">疫區輸入 免隔離申請方式選擇：</label>
+                                
+                                <label class="flex items-start gap-2 cursor-pointer">
+                                    <input 
+                                        type="radio" 
+                                        name="endemicOption" 
+                                        value="direct_report"
+                                        checked={endemicOption === 'direct_report'}
+                                        onChange={e => setEndemicOption(e.target.value)}
+                                        class="mt-1 text-teal-600"
+                                    />
+                                    <span class="text-xs text-slate-700">
+                                        <strong>方案 A (輸入20日前申請 + 報告直傳)：</strong> 抽血滿 180 天，且抗體報告由實驗室或輸出國官署直接 Email 至防檢署或官網可查。
+                                    </span>
+                                </label>
+
+                                <label class="flex items-start gap-2 cursor-pointer">
+                                    <input 
+                                        type="radio" 
+                                        name="endemicOption" 
+                                        value="early_120"
+                                        checked={endemicOption === 'early_120'}
+                                        onChange={e => setEndemicOption(e.target.value)}
+                                        class="mt-1 text-teal-600"
+                                    />
+                                    <span class="text-xs text-slate-700">
+                                        <strong>方案 B (輸入120日前提早申請)：</strong> 抽血滿 180 天，並於入境 120 天前完成線上申請。
+                                    </span>
+                                </label>
+
+                                <label class="flex items-start gap-2 cursor-pointer">
+                                    <input 
+                                        type="radio" 
+                                        name="endemicOption" 
+                                        value="standard_isolate"
+                                        checked={endemicOption === 'standard_isolate'}
+                                        onChange={e => setEndemicOption(e.target.value)}
+                                        class="mt-1 text-teal-600"
+                                    />
+                                    <span class="text-xs text-slate-700">
+                                        <strong>方案 C (接受隔離 7 天)：</strong> 抽血滿 90 天未滿 180 天，或無法辦理直傳，入境後前往指定場所隔離 7 天。
+                                    </span>
+                                </label>
+                            </div>
+                        )}
+
+                        <button 
+                            type="submit"
+                            class="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 rounded-xl shadow-md transition-all flex items-center justify-center gap-2 text-sm mt-4"
+                        >
+                            <i class="fa-solid fa-calculator"></i> 開始分析檢疫規定與流程
+                        </button>
+                    </form>
+                </div>
+
+                {/* Analysis Output Section */}
+                <div class="lg:col-span-7 space-y-6">
+                    {result ? (
+                        <>
+                            {/* Quarantine Result Card */}
+                            <div class={`p-6 rounded-2xl shadow-sm border ${
+                                result.status === 'DANGER' ? 'bg-red-50 border-red-200' :
+                                result.isolationDays === 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'
+                            }`}>
+                                <div class="flex items-center gap-3 mb-2">
+                                    <div class={`w-10 h-10 rounded-full flex items-center justify-center text-xl font-bold ${
+                                        result.status === 'DANGER' ? 'bg-red-500 text-white' :
+                                        result.isolationDays === 0 ? 'bg-emerald-500 text-white' : 'bg-amber-500 text-white'
+                                    }`}>
+                                        {result.isolationDays === 0 ? <i class="fa-solid fa-check"></i> : <i class="fa-solid fa-triangle-exclamation"></i>}
+                                    </div>
+                                    <div>
+                                        <h3 class="text-xs uppercase tracking-wider font-bold text-slate-500">檢疫結果判定</h3>
+                                        <h2 class={`text-xl font-extrabold ${
+                                            result.status === 'DANGER' ? 'text-red-800' :
+                                            result.isolationDays === 0 ? 'text-emerald-900' : 'text-amber-900'
+                                        }`}>
+                                            {result.statusTitle}
+                                        </h2>
+                                    </div>
+                                </div>
+
+                                {/* Warnings & Alerts */}
+                                {result.warnings.length > 0 && (
+                                    <div class="mt-4 p-3 bg-red-100/80 rounded-xl space-y-1 text-xs text-red-900 border border-red-200">
+                                        {result.warnings.map((w, idx) => (
+                                            <div key={idx} class="font-medium">{w}</div>
+                                        ))}
+                                    </div>
+                                )}
+
+                                {/* Informational bullets */}
+                                <div class="mt-4 space-y-2 text-xs text-slate-700">
+                                    {result.infoList.map((info, idx) => (
+                                        <div key={idx} class="flex items-start gap-2">
+                                            <span class="text-teal-600 font-bold">•</span>
+                                            <span>{info}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Timeline Component */}
+                            <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                                <h3 class="text-md font-bold text-slate-800 mb-4 flex items-center gap-2 border-b pb-3">
+                                    <i class="fa-solid fa-timeline text-teal-600"></i> 重要時間節點與規劃時程表
+                                </h3>
+
+                                <div class="relative pl-6 space-y-6 before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-teal-200">
+                                    {result.timeline.map((item, index) => (
+                                        <div key={index} class="relative">
+                                            <div class="absolute -left-6 top-1.5 w-3 h-3 bg-teal-600 rounded-full border-2 border-white ring-2 ring-teal-100"></div>
+                                            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                                                <h4 class="text-xs font-bold text-slate-800">{item.title}</h4>
+                                                {item.date && (
+                                                    <span class="text-xs font-mono bg-teal-50 text-teal-800 px-2.5 py-0.5 rounded-full border border-teal-200 w-max">
+                                                        {item.date}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <p class="text-xs text-slate-500 mt-1">{item.note}</p>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Step-by-Step Action Guide */}
+                            <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+                                <h3 class="text-md font-bold text-slate-800 border-b pb-3 flex items-center gap-2">
+                                    <i class="fa-solid fa-list-check text-teal-600"></i> 準備步驟與現場檢疫須知
+                                </h3>
+
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                                    <div class="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                                        <h4 class="font-bold text-teal-800 mb-1">1. 線上申請同意文件</h4>
+                                        <p class="text-slate-600">
+                                            請至「防檢署犬貓檢疫資訊網」填寫資料並上傳：身份證/護照、狂犬病疫苗證明、(疫區案件)狂犬病抗體報告。
+                                        </p>
+                                    </div>
+
+                                    <div class="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                                        <h4 class="font-bold text-teal-800 mb-1">2. 報告直傳機制 (免隔離)</h4>
+                                        <p class="text-slate-600">
+                                            若申請免隔離，抗體報告須由檢驗實驗室或輸出國官署直接 Email 至 <code class="bg-slate-200 px-1 rounded">rabiesreport@aphia.gov.tw</code> (主旨填寫晶片號碼)。
+                                        </p>
+                                    </div>
+
+                                    <div class="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                                        <h4 class="font-bold text-teal-800 mb-1">3. 現場規費 (現場現金繳交)</h4>
+                                        <p class="text-slate-600">
+                                            抵達台灣機場動植物檢疫櫃檯需繳交<strong>資料鍵輸費 (NT$100)</strong>。如需隔離，需另付載送費及隔離場檢疫費。
+                                        </p>
+                                    </div>
+
+                                    <div class="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                                        <h4 class="font-bold text-teal-800 mb-1">4. 寵物零食與飼料規定</h4>
+                                        <p class="text-slate-600">
+                                            攜帶犬貓食品入境必須申報。含偶蹄目 (豬牛羊) 或禽鳥類成分之飼料需檢疫核可；僅含海鮮或無牛源高溫罐頭可免檢。
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        </>
+                    ) : (
+                        <div class="bg-white p-12 rounded-2xl shadow-sm border border-slate-200 text-center flex flex-col items-center justify-center min-h-[400px]">
+                            <div class="w-16 h-16 bg-teal-50 text-teal-600 rounded-full flex items-center justify-center text-2xl mb-4">
+                                <i class="fa-solid fa-dog"></i>
+                            </div>
+                            <h3 class="text-base font-bold text-slate-700">請於左側輸入您的寵物檢疫相關日期</h3>
+                            <p class="text-xs text-slate-500 mt-2 max-w-md">
+                                系統將會根據 2026 最新台灣農業部防檢署規定，為您試算是否符合免隔離條件、隔離天數與關鍵時間節點。
+                            </p>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* Footer */}
+            <footer class="mt-12 text-center text-xs text-slate-500 border-t border-slate-200 pt-6">
+                <p>資料來源：中華民國農業部動植物防疫檢疫署《犬貓輸入檢疫條件》與《輸入犬貓檢疫規定問答集》(115年3月更新)</p>
+                <p class="mt-1">※ 本工具提供試算輔助，實際入境核准結果以防檢署系統審核之正式「輸入檢疫同意文件」為準。</p>
+            </footer>
+        </div>
+    );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<PetQuarantineApp />);
+</script>
+</body>
+</html>
